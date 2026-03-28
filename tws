@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# tws — timewarrior session wrapper
+# Usage:
+#   tws start <tag>      start a new tracked session
+#   tws continue [tag]   resume the most recent session (optionally for a specific tag)
+#   tws stop             emergency stop if nvim exits without cleaning up
+#
+# Quitting nvim ends the session: annotates the timewarrior interval and stops the timer.
+# tws stop is an emergency escape hatch if nvim exits without cleaning up.
+
+set -euo pipefail
+
+SESSIONS_DIR="${TIMEWARRIORDB:-$HOME/.timewarrior}/sessions"
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+_active_tag() {
+    timew 2>/dev/null | awk '/^Tracking/{print $2; exit}'
+}
+
+_session_dir() {
+    echo "$SESSIONS_DIR/$1"
+}
+
+_latest_session() {
+    local dir
+    dir="$(_session_dir "$1")"
+    ls -t "$dir"/*.md 2>/dev/null | head -1
+}
+
+_previous_session() {
+    local dir
+    dir="$(_session_dir "$1")"
+    ls -t "$dir"/*.md 2>/dev/null | sed -n '2p'
+}
+
+_most_recent_session() {
+    find "$SESSIONS_DIR" -name "*.md" 2>/dev/null \
+        | xargs ls -t 2>/dev/null \
+        | head -1
+}
+
+_tag_from_file() {
+    basename "$(dirname "$1")"
+}
+
+_new_session_file() {
+    local dir
+    dir="$(_session_dir "$1")"
+    mkdir -p "$dir"
+    echo "$dir/$(date +"%Y-%m-%dT%H-%M-%S").md"
+}
+
+_template() {
+    cat <<EOF
+# Session: $1 — $(date +"%Y-%m-%d %H:%M")
+
+## Goals
+- [ ]
+
+## Notes
+
+
+## Next Session
+
+EOF
+}
+
+_end_session() {
+    local session_file="$1"
+    timew annotate @1 "$(cat "$session_file")"
+    timew stop
+    echo "Stopped."
+}
+
+# ── nvim layout ──────────────────────────────────────────────────────────────
+
+_open_nvim() {
+    local main_file="$1"
+    local prev_file="$2"  # empty string if none
+
+    local timer_split=(
+        -c "nnoremap ZZ :wqa!<CR>"
+        -c "botright 5split"
+        -c "setlocal nonumber norelativenumber statusline=\ ⏱\ session\\ timer"
+        -c "terminal watch -n1 timew"
+        -c "2wincmd w"
+    )
+
+    if [[ -n "$prev_file" ]]; then
+        nvim -O "$prev_file" "$main_file" \
+            -c "wincmd h" \
+            -c "setlocal readonly nomodifiable" \
+            -c "wincmd l" \
+            "${timer_split[@]}"
+    else
+        nvim "$main_file" \
+            "${timer_split[@]}"
+    fi
+}
+
+# ── commands ─────────────────────────────────────────────────────────────────
+
+cmd_start() {
+    local tag="${1:?Usage: tws start <tag>}"
+    local new_file prev_file
+
+    local active
+    active="$(_active_tag)" || true
+    [[ -z "$active" ]] || { echo "Session already running: $active. Stop it first."; exit 1; }
+
+    prev_file="$(_latest_session "$tag")"
+
+    new_file="$(_new_session_file "$tag")"
+    _template "$tag" > "$new_file"
+
+    timew start "$tag"
+
+    _open_nvim "$new_file" "$prev_file"
+
+    _end_session "$new_file"
+}
+
+cmd_continue() {
+    local tag="${1:-}"
+    local session_file
+
+    if [[ -n "$tag" ]]; then
+        session_file="$(_latest_session "$tag")"
+        [[ -n "$session_file" ]] || { echo "No sessions found for '$tag'."; exit 1; }
+    else
+        session_file="$(_most_recent_session)"
+        [[ -n "$session_file" ]] || { echo "No sessions found."; exit 1; }
+        tag="$(_tag_from_file "$session_file")"
+    fi
+
+    local prev_file
+    prev_file="$(_previous_session "$tag")"
+
+    # Re-annotate the previous interval with current session content before starting a new one.
+    timew annotate @1 "$(cat "$session_file")"
+
+    timew start "$tag"
+    echo "Continuing: $tag"
+
+    _open_nvim "$session_file" "$prev_file"
+
+    _end_session "$session_file"
+}
+
+cmd_stop() {
+    local tag
+    tag="$(_active_tag)" || true
+    [[ -n "$tag" ]] || { echo "No active session."; exit 1; }
+
+    local session_file
+    session_file="$(_latest_session "$tag")"
+    if [[ -n "$session_file" ]]; then
+        timew annotate @1 "$(cat "$session_file")"
+    fi
+
+    timew stop
+    echo "Stopped: $tag"
+}
+
+# ── dispatch ─────────────────────────────────────────────────────────────────
+
+case "${1:-}" in
+    start)    shift; cmd_start "$@" ;;
+    continue) shift; cmd_continue "$@" ;;
+    stop)     cmd_stop ;;
+    *)
+        echo "Usage: tws <start|continue|stop> [tag]"
+        exit 1
+        ;;
+esac
