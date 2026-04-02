@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Called by sleepwatcher when the machine goes to sleep.
+# If a timewarrior session is active, pause it and save the tag for resume.
+
+tag=$(timew 2>/dev/null | awk '/^Tracking/{print $2; exit}')
+[[ -n "$tag" ]] || exit 0
+
+echo "$tag" > "${TMPDIR:-/tmp}/tws_paused_tag"
+timew stop >/dev/null 2>&1

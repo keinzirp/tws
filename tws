@@ -47,8 +47,12 @@ _prepend_entry() {
 
 _end_session() {
     local note_file="$1"
-    timew annotate @1 "$(cat "$note_file")"
-    timew stop
+    # Timer may already be stopped (e.g. by sleep hook)
+    if timew 2>/dev/null | grep -q '^Tracking'; then
+        timew annotate @1 "$(cat "$note_file")"
+        timew stop
+    fi
+    rm -f "${TMPDIR:-/tmp}/tws_paused_tag"
     echo "Stopped."
 }
 
@@ -67,7 +71,12 @@ _open_nvim() {
 # ── commands ─────────────────────────────────────────────────────────────────
 
 cmd_start() {
-    local tag="${1:?Usage: tws start <tag>}"
+    local tag="${1:-}"
+    if [[ -z "$tag" ]]; then
+        printf 'Task name: '
+        read -r tag
+        [[ -n "$tag" ]] || { echo "No task name given."; exit 1; }
+    fi
     tag="$(tr '[:upper:]' '[:lower:]' <<< "$tag")"
 
     local active

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Called by sleepwatcher when the machine wakes up.
+# If a tws session was paused on sleep and nvim is still running, resume it.
+
+pause_file="${TMPDIR:-/tmp}/tws_paused_tag"
+[[ -f "$pause_file" ]] || exit 0
+
+tag=$(cat "$pause_file")
+rm -f "$pause_file"
+
+[[ -n "$tag" ]] || exit 0
+
+# Only resume if a tws nvim session is still open
+pgrep -f 'nvim.*\.md' >/dev/null 2>&1 || exit 0
+
+# Don't double-start if somehow already tracking
+timew 2>/dev/null | grep -q '^Tracking' && exit 0
+
+timew start "$tag" >/dev/null 2>&1
