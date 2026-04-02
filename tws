@@ -26,6 +26,14 @@ _prepend_entry() {
     local file
     file="$(_note_file "$1")"
     mkdir -p "$NOTES_DIR"
+
+    # Skip if today's date is already the latest entry
+    local today
+    today="$(date '+%a %d %b %Y')"
+    if [[ -f "$file" ]] && head -1 "$file" | grep -q "^$today"; then
+        return
+    fi
+
     local header
     header="$(date '+%a %d %b %Y %H:%M:%S %Z')"$'\n- \n'
     if [[ -f "$file" ]]; then
@@ -122,7 +130,11 @@ case "${1:-}" in
     continue) shift; cmd_continue "$@" ;;
     stop)     cmd_stop ;;
     *)
-        echo "Usage: tws <start|continue|stop> [tag]"
-        exit 1
+        if [[ -n "${1:-}" ]]; then
+            cmd_start "$@"
+        else
+            echo "Usage: tws [start|continue|stop] <tag>"
+            exit 1
+        fi
         ;;
 esac
